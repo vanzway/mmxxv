@@ -1,0 +1,44 @@
+{
+  "server": {
+    "host": "localhost",
+    "port": 8765,
+    "logging": {
+      "enabled": true,
+      "level": "INFO",
+      "format": "%(asctime)s - %(levelname)s - %(message)s",
+      "handlers": {
+        "file": {
+          "filename": "mmxxv.log",
+          "enabled": true
+        },
+        "console": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "ollama": {
+    "host": "http://localhost:11434",
+    "models": {
+      "generation": "phi3",
+      "embedding": "nomic-embed-text"
+    }
+  },
+  "chromadb": {
+    "collection_name": "web_content",
+    "metadata": {
+      "hnsw:space": "cosine"
+    }
+  },
+  "content_processing": {
+    "max_chunk_length": 512,
+    "batch_size": 10
+  },
+  "query_enhancement": {
+    "max_results": 5
+  },
+  "urls": [
+    "https://www.thehindu.com/news/international/south-korea-plane-crash-jeju-aircraft-muan-airport-live-updates-december-29/article69039217.ece",
+    "https://www.thehindu.com/news/international/azerbaijan-accuses-russia-of-trying-to-hide-causes-of-plane-crash-says-the-plane-was-shot-from-russia/article69040088.ece"
+  ]
+}
