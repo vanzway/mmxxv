@@ -58,18 +58,33 @@ class OllamaEmbeddingFunction:
 				logging.exception(e)
 		return embeddings
 
+class ChromaDBManager:
+	def __init__(self, config: dict):
+		"""Initialize ChromaDB manager."""
+		self.client = chromadb.Client()
+		self.collection_name = config['chromadb']['collection_name']
+		self.metadata = config['chromadb']['metadata']
+		self.reset_collection()
+
+	def reset_collection(self):
+		"""Reset ChromaDB collection to initial state."""
+		try:
+			# Delete existing collection if it exists
+			self.client.delete_collection(self.collection_name)
+		except Exception:
+			pass  # Collection might not exist
+		# Create fresh collection
+		self.collection = self.client.create_collection(
+			name=self.collection_name,
+			metadata=self.metadata
+		)
+
 class OllamaEnhancer:
 	def __init__(self, config: dict):
-		"""Initialize the OllamaEnhancer with configuration."""
-		logging.info("Initializing OllamaEnhancer with config")
 		self.config = config
 		self.embedding_function = OllamaEmbeddingFunction(config)
-		self.client = chromadb.Client()
-		self.collection = self.client.create_collection(
-			name=config['chromadb']['collection_name'],
-			embedding_function=self.embedding_function,
-			metadata=config['chromadb']['metadata']
-		)
+		self.db_manager = ChromaDBManager(config)
+		self.collection = self.db_manager.collection
 		self.generation_model = config['ollama']['models']['generation']
 		self.ollama_client = Client(host=config['ollama']['host'])
 		self.max_chunk_length = config['content_processing']['max_chunk_length']
@@ -185,40 +200,44 @@ class OllamaEnhancer:
 		return chunks
 
 	def add_content(self, urls: List[str]) -> None:
-		"""Process and add content from URLs to the vector database."""
-		logging.info("Adding content from URLs: %s", urls)
-		all_documents = []
-		all_metadatas = []
-		all_ids = []
+			"""Process and add content from URLs to the vector database."""
+			# Reset collection before adding new content
+			self.db_manager.reset_collection()
+			self.collection = self.db_manager.collection
 
-		for url_idx, url in enumerate(urls):
-			structured_content = self.process_html(url)
+			logging.info("Adding content from URLs: %s", urls)
+			all_documents = []
+			all_metadatas = []
+			all_ids = []
 
-			for section_idx, section in enumerate(structured_content):
-				content_chunks = self.chunk_text(section['content'])
+			for url_idx, url in enumerate(urls):
+				structured_content = self.process_html(url)
 
-				for chunk_idx, chunk in enumerate(content_chunks):
-					doc_id = f"doc_{url_idx}{section_idx}{chunk_idx}"
+				for section_idx, section in enumerate(structured_content):
+					content_chunks = self.chunk_text(section['content'])
 
-					all_documents.append(chunk)
-					all_metadatas.append({
-						"url": url,
-						"heading": section['heading'],
-						"type": section['type'],
-						"chunk_idx": chunk_idx
-					})
-					all_ids.append(doc_id)
+					for chunk_idx, chunk in enumerate(content_chunks):
+						doc_id = f"doc_{url_idx}{section_idx}{chunk_idx}"
 
-		for i in range(0, len(all_documents), self.batch_size):
-			batch_docs = all_documents[i:i+self.batch_size]
-			batch_meta = all_metadatas[i:i+self.batch_size]
-			batch_ids = all_ids[i:i+self.batch_size]
+						all_documents.append(chunk)
+						all_metadatas.append({
+							"url": url,
+							"heading": section['heading'],
+							"type": section['type'],
+							"chunk_idx": chunk_idx
+						})
+						all_ids.append(doc_id)
 
-			self.collection.add(
-				documents=batch_docs,
-				metadatas=batch_meta,
-				ids=batch_ids
-			)
+			for i in range(0, len(all_documents), self.batch_size):
+				batch_docs = all_documents[i:i+self.batch_size]
+				batch_meta = all_metadatas[i:i+self.batch_size]
+				batch_ids = all_ids[i:i+self.batch_size]
+
+				self.collection.add(
+					documents=batch_docs,
+					metadatas=batch_meta,
+					ids=batch_ids
+				)
 
 	def enhance_query(self, query: str) -> str:
 		"""Enhance a query using semantically relevant content from the database."""
@@ -276,44 +295,28 @@ class OllamaEnhancer:
 			return "An unexpected error occurred while generating the response."
 
 async def websocket_handler(enhancer, websocket):
-	"""Handle WebSocket connections."""
-	logging.info("New WebSocket connection established.")
 	try:
 		async for message in websocket:
-			logging.info("Received message: %s", message)
 			data = json.loads(message)
+
+			if data.get("action") == "new_chat":
+				enhancer.db_manager.reset_collection()
+				await websocket.send(json.dumps({"response": "Chat reset successful"}))
+				continue
 
 			query = data.get("query")
 			urls = data.get("urls", [])
 
-			if not query:
-				await websocket.send(json.dumps({"error": "Missing 'query' in request"}))
+			if not query or not urls:
+				await websocket.send(json.dumps({"error": "Missing query or URLs"}))
 				continue
 
-			if not urls:
-				await websocket.send(json.dumps({"error": "Missing 'urls' in request"}))
-				continue
-
-			try:
-				logging.info("Adding content from URLs: %s", urls)
-				enhancer.add_content(urls)
-				response = enhancer.enhance_query(query)
-				await websocket.send(json.dumps({"response": response}))
-			except Exception as e:
-				logging.error("Error processing request.")
-				logging.exception(e)
-				await websocket.send(json.dumps({"error": "An error occurred while processing your request."}))
-	except websockets.exceptions.ConnectionClosedError as e:
-		logging.error("WebSocket connection was closed: %s", e)
+			enhancer.add_content(urls)
+			response = enhancer.enhance_query(query)
+			await websocket.send(json.dumps({"response": response}))
 	except Exception as e:
-		logging.error("Error in WebSocket handler.")
-		logging.exception(e)
-	finally:
-		try:
-			await websocket.close()
-		except Exception as e:
-			logging.error("Error while closing WebSocket: %s", e)
-		logging.info("WebSocket connection closed.")
+		logging.error("Error in WebSocket handler: %s", str(e))
+		await websocket.send(json.dumps({"error": str(e)}))
 
 async def start_server(enhancer, config: dict):
 	"""Start the WebSocket server."""

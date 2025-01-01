@@ -1,37 +1,43 @@
 {
 	"manifest_version": 3,
-	"name": "WebSocket Chatbot",
-	"description": "A chatbot that queries a WebSocket server with URLs and questions.",
+	"name": "MMXXV",
+	"description": "Meaningful Model for Exploring Expert Views: Client for MMXXV AI content scraping and inference server",
 	"version": "1.0",
+
 	"permissions": [
-	  "tabs",
-	  "activeTab",
-	  "storage"
+		"tabs",
+		"activeTab",
+		"storage"
 	],
+
 	"background": {
-	  "service_worker": "background.js"
+		"service_worker": "background.js"
 	},
+
 	"action": {
-	  "default_popup": "popup.html",
-	  "default_icon": {
+		"default_popup": "popup.html",
+		"default_icon": {
+			"16": "icons/icon16.png",
+			"48": "icons/icon48.png",
+			"128": "icons/icon128.png"
+		}
+	},
+
+	"icons": {
 		"16": "icons/icon16.png",
 		"48": "icons/icon48.png",
 		"128": "icons/icon128.png"
-	  }
 	},
-	"icons": {
-	  "16": "icons/icon16.png",
-	  "48": "icons/icon48.png",
-	  "128": "icons/icon128.png"
-	},
+
 	"host_permissions": [
-	  "http://*/*",
-	  "https://*/*"
+		"http://*/*",
+		"https://*/*"
 	],
+
 	"content_security_policy": {
-	  "extension": {
-		"script-src": "'self'",
-		"object-src": "'self'"
-	  }
+		"extension": {
+			"script-src": "'self'",
+			"object-src": "'self'"
+		}
 	}
-  }
+}
