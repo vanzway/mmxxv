@@ -6,9 +6,10 @@ import json
 import chromadb
 from bs4 import BeautifulSoup
 import requests
-from typing import List, Dict
+from typing import List, Dict, Generator
 from ollama import Client
 from ollama._types import ResponseError
+import textwrap
 
 def load_config(config_path: str) -> dict:
 	"""Load configuration from JSON file."""
@@ -50,12 +51,11 @@ class OllamaEmbeddingFunction:
 		embeddings = []
 		for text in input:
 			try:
-				logging.debug("Generating embedding for text: %s", text)
+				logging.info("Generating embedding for text.")
 				response = self.client.embeddings(model=self.model_name, prompt=text)
 				embeddings.append(response['embedding'])
 			except Exception as e:
-				logging.error("Error generating embedding for text: %s", text)
-				logging.exception(e)
+				logging.error("Error generating embedding.", exc_info=True)
 		return embeddings
 
 class ChromaDBManager:
@@ -96,7 +96,7 @@ class OllamaEnhancer:
 		logging.debug("Estimated tokens for text: %d", estimated_tokens)
 		return estimated_tokens
 
-	def process_html(self, url: str) -> List[Dict[str, str]]:
+	def process_html(self, url: str) -> Generator[Dict[str, str], None, None]:
 		"""Extract and structure content from HTML page."""
 		try:
 			logging.info("Processing HTML content from URL: %s", url)
@@ -107,9 +107,7 @@ class OllamaEnhancer:
 			for element in soup(["script", "style", "nav", "footer", "header"]):
 				element.decompose()
 
-			structured_content = []
 			main_content = soup.find('main') or soup.find('article') or soup.find('body')
-
 			if main_content is None:
 				logging.warning(f"No main content found for URL: {url}")
 				# Fall back to using the entire soup object
@@ -130,114 +128,80 @@ class OllamaEnhancer:
 						current = current.next_sibling if current else None
 
 					if section_content:
-						structured_content.append({
+						yield {
 							'heading': heading.get_text().strip(),
 							'content': ' '.join(filter(None, section_content)),
 							'type': heading.name,
 							'url': url
-						})
+						}
 
-			# If no content found by headings, try paragraphs and divs
-			if not structured_content:
+			if not headings:
 				paragraphs = main_content.find_all(['p', 'div', 'article'])
 				content = ' '.join(p.get_text().strip() for p in paragraphs if p.get_text().strip())
 				if content:
-					structured_content.append({
+					yield {
 						'heading': 'Main Content',
 						'content': content,
 						'type': 'body',
 						'url': url
-					})
+					}
 
-			# If still no content, try getting all text
-			if not structured_content:
+			if not headings and not paragraphs:
 				content = main_content.get_text().strip()
 				if content:
-					structured_content.append({
+					yield {
 						'heading': 'Page Content',
 						'content': content,
 						'type': 'body',
 						'url': url
-					})
+					}
 
-			if not structured_content:
+			if not headings and not paragraphs and not content:
 				logging.warning(f"No content extracted from URL: {url}")
-				return []
-
-			return structured_content
 
 		except requests.RequestException as e:
 			logging.error(f"Failed to fetch URL: {url}")
 			logging.exception(e)
-			return []
 		except Exception as e:
 			logging.error(f"Error processing HTML from URL: {url}")
 			logging.exception(e)
-			return []
 
 	def chunk_text(self, text: str) -> List[str]:
 		"""Split text into chunks based on estimated token length."""
-		chunks = []
-		sentences = text.split('. ')
-		current_chunk = []
-		current_length = 0
-
-		for sentence in sentences:
-			sentence_length = self.estimate_tokens(sentence)
-
-			if current_length + sentence_length > self.max_chunk_length:
-				if current_chunk:
-					chunks.append('. '.join(current_chunk) + '.')
-				current_chunk = [sentence]
-				current_length = sentence_length
-			else:
-				current_chunk.append(sentence)
-				current_length += sentence_length
-
-		if current_chunk:
-			chunks.append('. '.join(current_chunk) + '.')
-
-		return chunks
+		return textwrap.wrap(text, width=self.max_chunk_length // 4)
 
 	def add_content(self, urls: List[str]) -> None:
-			"""Process and add content from URLs to the vector database."""
-			# Reset collection before adding new content
-			self.db_manager.reset_collection()
-			self.collection = self.db_manager.collection
+		"""Process and add content from URLs to the vector database."""
+		self.db_manager.reset_collection()
+		self.collection = self.db_manager.collection
 
-			logging.info("Adding content from URLs: %s", urls)
-			all_documents = []
-			all_metadatas = []
-			all_ids = []
+		logging.info("Adding content from URLs: %s", urls)
+		all_documents = []
+		all_metadatas = []
+		all_ids = []
 
-			for url_idx, url in enumerate(urls):
-				structured_content = self.process_html(url)
+		for url_idx, url in enumerate(urls):
+			for section_idx, section in enumerate(self.process_html(url)):
+				content_chunks = self.chunk_text(section['content'])
 
-				for section_idx, section in enumerate(structured_content):
-					content_chunks = self.chunk_text(section['content'])
+				for chunk_idx, chunk in enumerate(content_chunks):
+					doc_id = f"doc_{url_idx}{section_idx}{chunk_idx}"
 
-					for chunk_idx, chunk in enumerate(content_chunks):
-						doc_id = f"doc_{url_idx}{section_idx}{chunk_idx}"
+					all_documents.append(chunk)
+					all_metadatas.append({
+						"url": url,
+						"heading": section['heading'],
+						"type": section['type'],
+						"chunk_idx": chunk_idx
+					})
+					all_ids.append(doc_id)
 
-						all_documents.append(chunk)
-						all_metadatas.append({
-							"url": url,
-							"heading": section['heading'],
-							"type": section['type'],
-							"chunk_idx": chunk_idx
-						})
-						all_ids.append(doc_id)
-
-			for i in range(0, len(all_documents), self.batch_size):
-				batch_docs = all_documents[i:i+self.batch_size]
-				batch_meta = all_metadatas[i:i+self.batch_size]
-				batch_ids = all_ids[i:i+self.batch_size]
-
-				self.collection.add(
-					documents=batch_docs,
-					metadatas=batch_meta,
-					ids=batch_ids
-				)
+		for i in range(0, len(all_documents), self.batch_size):
+			self.collection.add(
+				documents=all_documents[i:i+self.batch_size],
+				metadatas=all_metadatas[i:i+self.batch_size],
+				ids=all_ids[i:i+self.batch_size]
+			)
 
 	def enhance_query(self, query: str) -> str:
 		"""Enhance a query using semantically relevant content from the database."""
@@ -261,18 +225,18 @@ class OllamaEnhancer:
 			logging.warning("No relevant documents found for the query.")
 			return "No relevant context found in the database."
 
-		formatted_context = "\n---\n".join(
+		formatted_context = '\n---\n'.join(
 			f"[Source: {metadata['url']}, Section: {metadata.get('heading', 'Unknown')}]\n{doc}"
 			for doc, metadata in zip(documents, metadatas)
 		)
 
 		prompt = f"""Based on the following relevant context:
 
-	{formatted_context}
+		{formatted_context}
 
-	Please answer this query: {query}
+		Please answer this query: {query}
 
-	Provide detailed responses and reference specific sources when possible."""
+		Provide detailed responses and reference specific sources when possible."""
 
 		try:
 			response = self.ollama_client.chat(
@@ -324,7 +288,7 @@ async def start_server(enhancer, config: dict):
 	port = config['server']['port']
 	async with websockets.serve(lambda ws: websocket_handler(enhancer, ws), host, port):
 		logging.info("WebSocket server running on %s:%d", host, port)
-		await asyncio.Future()  # Run forever
+		await asyncio.Future()
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description="Run the OllamaEnhancer script.")
