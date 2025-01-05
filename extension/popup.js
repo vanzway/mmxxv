@@ -42,7 +42,7 @@ function saveChatState() {
 	const chatMessages = Array.from(document.getElementsByClassName('message')).map(
 		(message) => ({
 			text: message.innerHTML,
-			sender: message.classList.contains('user') ? 'user' : 'bot'
+			sender: message.classList.contains('user') ? 'user' : message.classList.contains('bot') ? 'bot' : null
 		})
 	);
 	chrome.storage.local.set({
@@ -102,10 +102,25 @@ function getTabUrl() {
 // Display the list of sources
 function displaySources() {
 	const chatBox = document.getElementById('chat-box');
-	const sourceList = Object.keys(sources).map(url =>
-		`<div class="message bot">${url}</div>`
-	).join('');
+	const sourceList = Object.keys(sources).map(url => `
+		<div class="message">
+			<div class="source-container">
+				<span>${url}</span>
+				<button class="delete-btn" data-url="${url}">×</button>
+			</div>
+		</div>
+	`).join('');
 	chatBox.innerHTML = sourceList;
+
+	// Add event listeners to delete buttons
+	document.querySelectorAll('.delete-btn').forEach(button => {
+		button.addEventListener('click', (e) => {
+			const url = e.target.getAttribute('data-url');
+			delete sources[url];
+			saveChatState();
+			displaySources();
+		});
+	});
 }
 
 // Display message in the chat box
@@ -143,18 +158,64 @@ function displayMessage(message, sender) {
 // Send the query to WebSocket server
 function sendQuery() {
 	const queryInput = document.getElementById('query-input');
+	const sendQueryBtn = document.getElementById('send-query-btn');
+	const urlInput = document.getElementById('url-input');
+	const addUrlBtn = document.getElementById('add-url-btn');
+	const getTabUrlBtn = document.getElementById('get-tab-url-btn');
 	const query = queryInput.value.trim();
 
 	if (query && ws.readyState === WebSocket.OPEN) {
+		// Disable all input elements
+		const elementsToDisable = [
+			queryInput,
+			sendQueryBtn,
+			urlInput,
+			addUrlBtn,
+			getTabUrlBtn
+		];
+
+		// Disable all elements
+		elementsToDisable.forEach(element => {
+			element.disabled = true;
+			if (element.tagName.toLowerCase() === 'input') {
+				element.classList.add('input-disabled');
+			}
+		});
+
 		displayMessage(query, 'user');
 		queryInput.value = ''; // Clear input
 
 		const message = {
 			query: query,
-			sources: sources  // Send the sources object instead of urls array
+			sources: sources
 		};
 
 		ws.send(JSON.stringify(message));
+
+		// Re-enable input and button after response is received
+		ws.onmessage = (event) => {
+			try {
+				const response = JSON.parse(event.data);
+				if (response && response.response) {
+					displayMessage(response.response, 'bot');
+				} else if (response.error) {
+					displayMessage(response.error, 'bot');
+				} else {
+					displayMessage("No response received from server.", 'bot');
+				}
+			} catch (error) {
+				console.error("Error parsing WebSocket response:", error);
+				displayMessage("Error receiving response from server.", 'bot');
+			} finally {
+				// Re-enable all elements
+				elementsToDisable.forEach(element => {
+					element.disabled = false;
+					if (element.tagName.toLowerCase() === 'input') {
+						element.classList.remove('input-disabled');
+					}
+				});
+			}
+		};
 	} else if (ws.readyState !== WebSocket.OPEN) {
 		displayMessage("WebSocket is not connected. Please try again later.", 'bot');
 	}
