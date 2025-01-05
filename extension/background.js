@@ -10,16 +10,34 @@ chrome.action.onClicked.addListener((tab) => {
 	});
 });
 
+// Function to get the current tab's URL and DOM content
+const getTabContent = () => {
+	// Get the entire DOM content
+	const htmlContent = document.documentElement.outerHTML;
+	return htmlContent;
+};
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	if (message.action === "getUrl") {
 		chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
 			if (tabs && tabs[0]) {
-				sendResponse({ url: tabs[0].url });
+			chrome.scripting.executeScript({
+				target: { tabId: tabs[0].id },
+				function: getTabContent
+			}, (results) => {
+				if (results && results[0]) {
+				sendResponse({
+					url: tabs[0].url,
+					content: results[0].result
+				});
+				} else {
+				sendResponse({ url: tabs[0].url, content: null });
+				}
+			});
 			} else {
-				sendResponse({ url: null });
+			sendResponse({ url: null, content: null });
 			}
 		});
-		// Required to indicate an asynchronous response
 		return true;
 	}
 });
