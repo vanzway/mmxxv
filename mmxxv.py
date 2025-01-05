@@ -6,7 +6,7 @@ import json
 import chromadb
 from bs4 import BeautifulSoup
 import requests
-from typing import List, Dict, Generator
+from typing import List, Dict, Generator, Optional
 from ollama import Client
 from ollama._types import ResponseError
 import textwrap
@@ -37,6 +37,39 @@ def setup_logging(config: dict):
 			format=logging_config['format'],
 			handlers=handlers
 		)
+
+class ChunkedMessageHandler:
+	def __init__(self):
+		self.message_buffers = {}
+
+	def process_chunk(self, data):
+		message_id = data.get('messageId')
+		if not message_id:
+			return None
+
+		if data.get('chunkIndex') == -1:  # Metadata
+			self.message_buffers[message_id] = {
+				'chunks': [''] * data['totalChunks'],
+				'received': 0,
+				'type': data['type']
+			}
+			return None
+
+		buffer = self.message_buffers.get(message_id)
+		if not buffer:
+			return None
+
+		chunk_index = data.get('chunkIndex')
+		if chunk_index is not None:
+			buffer['chunks'][chunk_index] = data['chunk']
+			buffer['received'] += 1
+
+			if buffer['received'] == len(buffer['chunks']):
+				complete_message = ''.join(buffer['chunks'])
+				del self.message_buffers[message_id]
+				return {'type': buffer['type'], 'content': complete_message}
+
+		return None
 
 class OllamaEmbeddingFunction:
 	def __init__(self, config: dict):
@@ -90,18 +123,10 @@ class OllamaEnhancer:
 		self.max_chunk_length = config['content_processing']['max_chunk_length']
 		self.batch_size = config['content_processing']['batch_size']
 
-	def estimate_tokens(self, text: str) -> int:
-		"""Estimate number of tokens in text using character count heuristic."""
-		estimated_tokens = len(text) // 4
-		logging.debug("Estimated tokens for text: %d", estimated_tokens)
-		return estimated_tokens
-
-	def process_html(self, url: str) -> Generator[Dict[str, str], None, None]:
+	def process_content(self, content: str, url: str) -> Generator[Dict[str, str], None, None]:
 		"""Extract and structure content from HTML page."""
 		try:
-			logging.info("Processing HTML content from URL: %s", url)
-			response = requests.get(url)
-			soup = BeautifulSoup(response.content, 'html.parser')
+			soup = BeautifulSoup(content, 'html.parser')
 
 			# Remove script and style elements
 			for element in soup(["script", "style", "nav", "footer", "header"]):
@@ -166,46 +191,90 @@ class OllamaEnhancer:
 			logging.error(f"Error processing HTML from URL: {url}")
 			logging.exception(e)
 
+	def _extract_sections(self, content, url: str) -> List[Dict[str, str]]:
+		"""Extract content sections from HTML or text."""
+		sections = []
+		headings = content.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+
+		if headings:
+			for heading in headings:
+				section_content = []
+				current = heading.next_sibling
+
+				while current and not current.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+					if isinstance(current, str) and current.strip():
+						section_content.append(current.strip())
+					elif current and current.name in ['p', 'div', 'span', 'li', 'td', 'pre', 'code']:
+						section_content.append(current.get_text().strip())
+					current = current.next_sibling if current else None
+
+				if section_content:
+					sections.append({
+						'heading': heading.get_text().strip(),
+						'content': ' '.join(filter(None, section_content)),
+						'type': heading.name,
+						'url': url
+					})
+
+		return sections
+
 	def chunk_text(self, text: str) -> List[str]:
 		"""Split text into chunks based on estimated token length."""
 		return textwrap.wrap(text, width=self.max_chunk_length // 4)
 
-	def add_content(self, urls: List[str]) -> None:
+	def add_content(self, sources: Dict[str, Optional[str]]) -> None:
 		"""Process and add content from URLs to the vector database."""
 		self.db_manager.reset_collection()
 		self.collection = self.db_manager.collection
 
-		logging.info("Adding content from URLs: %s", urls)
+		logging.info("Adding content to database")
 		all_documents = []
 		all_metadatas = []
 		all_ids = []
 
-		for url_idx, url in enumerate(urls):
-			for section_idx, section in enumerate(self.process_html(url)):
-				content_chunks = self.chunk_text(section['content'])
+		for url, content in sources.items():
+			try:
+				if content is None:
+					# Fetch content from URL
+					response = requests.get(url)
+					response.raise_for_status()
+					content = response.text
+				else:
+					content = "<!DOCTYPE html>" + content
 
-				for chunk_idx, chunk in enumerate(content_chunks):
-					doc_id = f"doc_{url_idx}{section_idx}{chunk_idx}"
+				# Process content
+				for section_idx, section in enumerate(self.process_content(content, url)):
+					content_chunks = self.chunk_text(section['content'])
 
-					all_documents.append(chunk)
-					all_metadatas.append({
-						"url": url,
-						"heading": section['heading'],
-						"type": section['type'],
-						"chunk_idx": chunk_idx
-					})
-					all_ids.append(doc_id)
+					for chunk_idx, chunk in enumerate(content_chunks):
+						doc_id = f"doc_{url}_{section_idx}_{chunk_idx}"
+						all_documents.append(chunk)
+						all_metadatas.append({
+							"url": url,
+							"heading": section['heading'],
+							"type": section['type'],
+							"chunk_idx": chunk_idx
+						})
+						all_ids.append(doc_id)
 
-		for i in range(0, len(all_documents), self.batch_size):
-			self.collection.add(
-				documents=all_documents[i:i+self.batch_size],
-				metadatas=all_metadatas[i:i+self.batch_size],
-				ids=all_ids[i:i+self.batch_size]
-			)
+			except Exception as e:
+				logging.error(f"Error processing source {url}: {str(e)}")
+
+		# Add to ChromaDB in batches
+		if all_documents:
+			for i in range(0, len(all_documents), self.batch_size):
+				self.collection.add(
+					documents=all_documents[i:i+self.batch_size],
+					metadatas=all_metadatas[i:i+self.batch_size],
+					ids=all_ids[i:i+self.batch_size],
+				)
+			logging.info(f"Added {len(all_documents)} documents to ChromaDB")
+		else:
+			logging.warning("No content was added to the database")
 
 	def enhance_query(self, query: str) -> str:
 		"""Enhance a query using semantically relevant content from the database."""
-		logging.info("Enhancing query: %s", query)
+		logging.info("Applying user query: %s", query)
 
 		try:
 			results = self.collection.query(
@@ -244,7 +313,7 @@ class OllamaEnhancer:
 				messages=[{'role': 'user', 'content': prompt}]
 			)
 			answer = response.get('message', {}).get('content', "No response from the model.")
-			logging.info("LLM response: %s", answer)
+			logging.info("LLM response generated.")
 			return answer
 		except ResponseError as e:
 			if "not found" in str(e).lower():
@@ -259,6 +328,7 @@ class OllamaEnhancer:
 			return "An unexpected error occurred while generating the response."
 
 async def websocket_handler(enhancer, websocket):
+	"""Handle WebSocket connections and messages."""
 	try:
 		async for message in websocket:
 			data = json.loads(message)
@@ -269,17 +339,21 @@ async def websocket_handler(enhancer, websocket):
 				continue
 
 			query = data.get("query")
-			urls = data.get("urls", [])
+			sources = data.get("sources")
 
-			if not query or not urls:
-				await websocket.send(json.dumps({"error": "Missing query or URLs"}))
+			if not query or not sources:
+				await websocket.send(json.dumps({"error": "Missing query or sources"}))
 				continue
 
-			enhancer.add_content(urls)
+			# Add content to the database
+			enhancer.add_content(sources)
+
+			# Generate response
 			response = enhancer.enhance_query(query)
 			await websocket.send(json.dumps({"response": response}))
+
 	except Exception as e:
-		logging.error("Error in WebSocket handler: %s", str(e))
+		logging.error(f"Error in WebSocket handler: {str(e)}")
 		await websocket.send(json.dumps({"error": str(e)}))
 
 async def start_server(enhancer, config: dict):
