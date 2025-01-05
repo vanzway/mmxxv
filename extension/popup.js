@@ -1,5 +1,5 @@
 let ws;
-let sources = {};  // Changed from urls array to sources object
+let sources = {};
 
 // Connect to WebSocket server
 function connectWebSocket() {
