@@ -1,5 +1,5 @@
 let ws;
-let urls = [];
+let sources = {};  // Changed from urls array to sources object
 
 // Connect to WebSocket server
 function connectWebSocket() {
@@ -7,6 +7,8 @@ function connectWebSocket() {
 
 	ws.onopen = () => {
 		console.log("Connected to WebSocket server.");
+		// Send new chat message to reset server state
+		ws.send(JSON.stringify({ action: "new_chat" }));
 	};
 
 	ws.onmessage = (event) => {
@@ -14,6 +16,8 @@ function connectWebSocket() {
 			const response = JSON.parse(event.data);
 			if (response && response.response) {
 				displayMessage(response.response, 'bot');
+			} else if (response.error) {
+				displayMessage(response.error, 'bot');
 			} else {
 				displayMessage("No response received from server.", 'bot');
 			}
@@ -41,18 +45,24 @@ function saveChatState() {
 			sender: message.classList.contains('user') ? 'user' : 'bot'
 		})
 	);
-	chrome.storage.local.set({ chatMessages: chatMessages }, () => {
-	console.log("Chat state saved.");
+	chrome.storage.local.set({
+		chatMessages: chatMessages,
+		sources: sources  // Save sources instead of urls
+	}, () => {
+		console.log("Chat state saved.");
 	});
 }
 
 // Load chat state from chrome.storage.local
 function loadChatState() {
-	chrome.storage.local.get(['chatMessages'], (result) => {
+	chrome.storage.local.get(['chatMessages', 'sources'], (result) => {
+		if (result.sources) {
+			sources = result.sources;
+			displaySources();
+		}
 		if (result.chatMessages) {
 			const chatBox = document.getElementById('chat-box');
 			chatBox.innerHTML = '';
-
 			result.chatMessages.forEach((message) => {
 				const messageDiv = document.createElement('div');
 				messageDiv.classList.add('message', message.sender);
@@ -63,33 +73,16 @@ function loadChatState() {
 	});
 }
 
-// Save URL state to chrome.storage.local
-function saveState() {
-	chrome.storage.local.set({ urls: urls }, () => {
-		console.log("State saved.");
-	});
-}
-
-// Load URL state from chrome.storage.local
-function loadState() {
-	chrome.storage.local.get(['urls'], (result) => {
-		if (result.urls) {
-			urls = result.urls;
-			displayUrls();
-		}
-	});
-}
-
-// Add a URL to the list
+// Add a URL to the sources
 function addUrl() {
 	const urlInput = document.getElementById('url-input');
 	const url = urlInput.value.trim();
 
-	if (url && !urls.includes(url)) {
-		urls.push(url);
-		saveState();
+	if (url && !(url in sources)) {
+		sources[url] = null;  // null indicates content should be fetched from URL
+		saveChatState();
 		urlInput.value = '';  // Clear input
-		displayUrls();
+		displaySources();
 	}
 }
 
@@ -97,20 +90,22 @@ function addUrl() {
 function getTabUrl() {
 	chrome.runtime.sendMessage({ action: "getUrl" }, (response) => {
 		if (response && response.url) {
-			urls.push(response.url);
-			saveState();
-			displayUrls();
+			sources[response.url] = response.content;
+			saveChatState();
+			displaySources();
 		} else {
 			console.error("Unable to retrieve tab URL.");
 		}
 	});
 }
 
-// Display the list of URLs
-function displayUrls() {
+// Display the list of sources
+function displaySources() {
 	const chatBox = document.getElementById('chat-box');
-	const urlList = urls.map(url => `<div class="message bot">${url}</div>`).join('');
-	chatBox.innerHTML = urlList;
+	const sourceList = Object.keys(sources).map(url =>
+		`<div class="message bot">${url}</div>`
+	).join('');
+	chatBox.innerHTML = sourceList;
 }
 
 // Display message in the chat box
@@ -145,13 +140,6 @@ function displayMessage(message, sender) {
 	saveChatState();
 }
 
-// Handle text input and send query to WebSocket server
-function handleKeydown(event) {
-	if (event.key === 'Enter') {
-		sendQuery();
-	}
-}
-
 // Send the query to WebSocket server
 function sendQuery() {
 	const queryInput = document.getElementById('query-input');
@@ -162,8 +150,8 @@ function sendQuery() {
 		queryInput.value = ''; // Clear input
 
 		const message = {
-		query: query,
-		urls: urls
+			query: query,
+			sources: sources  // Send the sources object instead of urls array
 		};
 
 		ws.send(JSON.stringify(message));
@@ -172,36 +160,15 @@ function sendQuery() {
 	}
 }
 
-// Initialize WebSocket connection
-connectWebSocket();
-
-// Load state when the popup is opened
-document.addEventListener('DOMContentLoaded', () => {
-	loadState();
-	loadChatState();
-	connectWebSocket();
-});
-
-// Attach event listeners
-document.getElementById('add-url-btn').addEventListener('click', addUrl);
-document.getElementById('get-tab-url-btn').addEventListener('click', getTabUrl);
-document.getElementById('send-query-btn').addEventListener('click', sendQuery);
-document.getElementById('query-input').addEventListener('keydown', handleKeydown);
-
-// Close popup explicitly
-document.getElementById('close-popup-btn').addEventListener('click', () => {
-	window.close();
-});
-
 // Handle new chat
-document.getElementById('new-chat-btn').addEventListener('click', () => {
+function handleNewChat() {
 	// Clear local storage
 	chrome.storage.local.clear(() => {
 		console.log("Local storage cleared.");
 	});
 
-	// Reset URLs and chat box
-	urls = [];
+	// Reset sources and chat box
+	sources = {};
 	const chatBox = document.getElementById('chat-box');
 	chatBox.innerHTML = '';
 
@@ -210,4 +177,27 @@ document.getElementById('new-chat-btn').addEventListener('click', () => {
 	connectWebSocket();
 
 	console.log("New chat initialized.");
+}
+
+// Initialize WebSocket connection
+connectWebSocket();
+
+// Load state when the popup is opened
+document.addEventListener('DOMContentLoaded', () => {
+	loadChatState();
+	connectWebSocket();
 });
+
+// Attach event listeners
+document.getElementById('add-url-btn').addEventListener('click', addUrl);
+document.getElementById('get-tab-url-btn').addEventListener('click', getTabUrl);
+document.getElementById('send-query-btn').addEventListener('click', sendQuery);
+document.getElementById('query-input').addEventListener('keydown', (event) => {
+	if (event.key === 'Enter') {
+		sendQuery();
+	}
+});
+document.getElementById('close-popup-btn').addEventListener('click', () => {
+	window.close();
+});
+document.getElementById('new-chat-btn').addEventListener('click', handleNewChat);
