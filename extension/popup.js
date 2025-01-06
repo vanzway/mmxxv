@@ -17,19 +17,19 @@ function connectWebSocket() {
 			if (response && response.response) {
 				displayMessage(response.response, 'bot');
 			} else if (response.error) {
-				displayMessage(response.error, 'bot');
+				displayMessage(response.error, 'system');
 			} else {
-				displayMessage("No response received from server.", 'bot');
+				displayMessage("No response received from server.", 'system');
 			}
 		} catch (error) {
 			console.error("Error parsing WebSocket response:", error);
-			displayMessage("Error receiving response from server.", 'bot');
+			displayMessage("Error receiving response from server.", 'system');
 		}
 	};
 
 	ws.onerror = (error) => {
 		console.error("WebSocket error:", error);
-		displayMessage("WebSocket error: " + error.message, 'bot');
+		displayMessage("WebSocket error: " + error.message, 'system');
 	};
 
 	ws.onclose = () => {
@@ -42,7 +42,7 @@ function saveChatState() {
 	const chatMessages = Array.from(document.getElementsByClassName('message')).map(
 		(message) => ({
 			text: message.innerHTML,
-			sender: message.classList.contains('user') ? 'user' : message.classList.contains('bot') ? 'bot' : null
+			sender: message.classList.contains('user') ? 'user' : message.classList.contains('bot') ? 'bot' : 'system'
 		})
 	);
 	chrome.storage.local.set({
@@ -103,7 +103,7 @@ function getTabUrl() {
 function displaySources() {
 	const chatBox = document.getElementById('chat-box');
 	const sourceList = Object.keys(sources).map(url => `
-		<div class="message">
+		<div class="message system">
 			<div class="source-container">
 				<span>${url}</span>
 				<button class="delete-btn" data-url="${url}">×</button>
@@ -199,13 +199,13 @@ function sendQuery() {
 				if (response && response.response) {
 					displayMessage(response.response, 'bot');
 				} else if (response.error) {
-					displayMessage(response.error, 'bot');
+					displayMessage(response.error, 'system');
 				} else {
-					displayMessage("No response received from server.", 'bot');
+					displayMessage("No response received from server.", 'system');
 				}
 			} catch (error) {
 				console.error("Error parsing WebSocket response:", error);
-				displayMessage("Error receiving response from server.", 'bot');
+				displayMessage("Error receiving response from server.", 'system');
 			} finally {
 				// Re-enable all elements
 				elementsToDisable.forEach(element => {
@@ -217,7 +217,7 @@ function sendQuery() {
 			}
 		};
 	} else if (ws.readyState !== WebSocket.OPEN) {
-		displayMessage("WebSocket is not connected. Please try again later.", 'bot');
+		displayMessage("WebSocket is not connected. Please try again later.", 'system');
 	}
 }
 
