@@ -3,6 +3,29 @@ let sources = {};
 let messageQueue = [];
 let isConnecting = false;
 
+function setInputElementsState(isEnabled) {
+	const elements = [
+		document.getElementById('query-input'),
+		document.getElementById('send-query-btn'),
+		document.getElementById('url-input'),
+		document.getElementById('add-url-btn'),
+		document.getElementById('get-tab-url-btn')
+	];
+
+	elements.forEach(element => {
+		if (element) {
+			element.disabled = !isEnabled;
+			if (element.tagName.toLowerCase() === 'input') {
+				if (isEnabled) {
+					element.classList.remove('input-disabled');
+				} else {
+					element.classList.add('input-disabled');
+				}
+			}
+		}
+	});
+}
+
 // Message chunking implementation
 class MessageChunker {
 	constructor(maxChunkSize = 1024 * 64) { // 64KB default chunk size
@@ -82,8 +105,11 @@ function connectWebSocket() {
 			} else {
 				displayMessage("No response received from server.", 'system');
 			}
+			// Enable input elements after processing the response
+			setInputElementsState(true);
 		} catch (error) {
 			displayMessage("Error receiving response from server.", 'system');
+			setInputElementsState(true);  // Also enable inputs if there's an error
 		}
 	};
 
@@ -241,29 +267,12 @@ function displayMessage(message, sender) {
 // Send the query to WebSocket server
 function sendQuery() {
 	const queryInput = document.getElementById('query-input');
-	const sendQueryBtn = document.getElementById('send-query-btn');
-	const urlInput = document.getElementById('url-input');
-	const addUrlBtn = document.getElementById('add-url-btn');
-	const getTabUrlBtn = document.getElementById('get-tab-url-btn');
 	const query = queryInput.value.trim();
 
 	if (!query) return;
 
 	// Disable all input elements
-	const elementsToDisable = [
-		queryInput,
-		sendQueryBtn,
-		urlInput,
-		addUrlBtn,
-		getTabUrlBtn
-	];
-
-	elementsToDisable.forEach(element => {
-		element.disabled = true;
-		if (element.tagName.toLowerCase() === 'input') {
-			element.classList.add('input-disabled');
-		}
-	});
+	setInputElementsState(false);
 
 	displayMessage(query, 'user');
 	queryInput.value = ''; // Clear input
@@ -280,8 +289,6 @@ function sendQuery() {
 	chunks.forEach((chunk, index) => {
 		sendWebSocketMessage(chunk);
 	});
-
-	// Re-enable handler is in ws.onmessage
 }
 
 // Handle new chat
