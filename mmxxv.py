@@ -41,35 +41,54 @@ def setup_logging(config: dict):
 class ChunkedMessageHandler:
 	def __init__(self):
 		self.message_buffers = {}
+		logging.info("Initialized ChunkedMessageHandler")
 
 	def process_chunk(self, data):
-		message_id = data.get('messageId')
-		if not message_id:
+		"""Process an incoming chunk and return complete message if all chunks received."""
+		try:
+			message_id = data.get('messageId')
+			if not message_id:
+				logging.error("Received chunk without messageId")
+				return None
+
+			logging.debug(f"Processing chunk for message {message_id}: {data}")
+
+			# Handle metadata chunk
+			if data.get('chunkIndex') == -1:  # Metadata chunk
+				logging.info(f"Received metadata chunk for message {message_id}")
+				self.message_buffers[message_id] = {
+					'chunks': [''] * data['totalChunks'],
+					'received': 0,
+					'type': data['type']
+				}
+				return None
+
+			# Get buffer for this message
+			buffer = self.message_buffers.get(message_id)
+			if not buffer:
+				logging.error(f"Received chunk for unknown message {message_id}")
+				return None
+
+			# Process data chunk
+			chunk_index = data.get('chunkIndex')
+			if chunk_index is not None:
+				logging.debug(f"Storing chunk {chunk_index} for message {message_id}")
+				buffer['chunks'][chunk_index] = data['chunk']
+				buffer['received'] += 1
+
+				# Check if message is complete
+				if buffer['received'] == len(buffer['chunks']):
+					logging.info(f"Message {message_id} complete, reassembling...")
+					complete_message = ''.join(buffer['chunks'])
+					message_type = buffer['type']
+					del self.message_buffers[message_id]
+					return {'type': message_type, 'content': complete_message}
+
 			return None
 
-		if data.get('chunkIndex') == -1:  # Metadata
-			self.message_buffers[message_id] = {
-				'chunks': [''] * data['totalChunks'],
-				'received': 0,
-				'type': data['type']
-			}
+		except Exception as e:
+			logging.error(f"Error processing chunk: {str(e)}")
 			return None
-
-		buffer = self.message_buffers.get(message_id)
-		if not buffer:
-			return None
-
-		chunk_index = data.get('chunkIndex')
-		if chunk_index is not None:
-			buffer['chunks'][chunk_index] = data['chunk']
-			buffer['received'] += 1
-
-			if buffer['received'] == len(buffer['chunks']):
-				complete_message = ''.join(buffer['chunks'])
-				del self.message_buffers[message_id]
-				return {'type': buffer['type'], 'content': complete_message}
-
-		return None
 
 class OllamaEmbeddingFunction:
 	def __init__(self, config: dict):
@@ -329,32 +348,81 @@ class OllamaEnhancer:
 
 async def websocket_handler(enhancer, websocket):
 	"""Handle WebSocket connections and messages."""
+	chunk_handler = ChunkedMessageHandler()
+
 	try:
 		async for message in websocket:
-			data = json.loads(message)
+			try:
+				data = json.loads(message)
+				logging.debug(f"Received websocket message: {data}")
 
-			if data.get("action") == "new_chat":
-				enhancer.db_manager.reset_collection()
-				await websocket.send(json.dumps({"response": "Chat reset successful"}))
+				# Process the chunk
+				complete_message = chunk_handler.process_chunk(data)
+
+				# If we have a complete message, process it
+				if complete_message:
+					logging.info(f"Processing complete message of type: {complete_message['type']}")
+
+					if complete_message['type'] == 'query':
+						try:
+							message_data = json.loads(complete_message['content'])
+							logging.debug(f"Parsed message data: {message_data}")
+
+							query = message_data.get("query")
+							sources = message_data.get("sources")
+
+							if not query:
+								logging.error("Missing query in message data")
+							if not sources:
+								logging.error("Missing sources in message data")
+
+							if not query or not sources:
+								await websocket.send(json.dumps({"error": "Missing query or sources"}))
+								continue
+
+							# Add content to the database
+							enhancer.add_content(sources)
+
+							# Generate response
+							response = enhancer.enhance_query(query)
+							await websocket.send(json.dumps({"response": response}))
+						except json.JSONDecodeError as e:
+							logging.error(f"Error decoding message content: {str(e)}")
+							await websocket.send(json.dumps({"error": "Invalid message content"}))
+							continue
+
+					elif complete_message['type'] == 'new_chat':
+						enhancer.db_manager.reset_collection()
+						await websocket.send(json.dumps({"response": "Chat reset successful"}))
+
+			except json.JSONDecodeError as e:
+				logging.error(f"Error decoding JSON message: {str(e)}")
+				await websocket.send(json.dumps({"error": "Invalid JSON message"}))
 				continue
 
-			query = data.get("query")
-			sources = data.get("sources")
-
-			if not query or not sources:
-				await websocket.send(json.dumps({"error": "Missing query or sources"}))
-				continue
-
-			# Add content to the database
-			enhancer.add_content(sources)
-
-			# Generate response
-			response = enhancer.enhance_query(query)
-			await websocket.send(json.dumps({"response": response}))
-
+	except websockets.exceptions.ConnectionClosed:
+		logging.info("WebSocket connection closed by client")
 	except Exception as e:
 		logging.error(f"Error in WebSocket handler: {str(e)}")
 		await websocket.send(json.dumps({"error": str(e)}))
+
+def setup_logging(config: dict):
+	"""Configure logging based on configuration."""
+	logging_config = config['server']['logging']
+	if logging_config['enabled']:
+		handlers = []
+
+		if logging_config['handlers']['file']['enabled']:
+			handlers.append(logging.FileHandler(logging_config['handlers']['file']['filename']))
+
+		if logging_config['handlers']['console']['enabled']:
+			handlers.append(logging.StreamHandler())
+
+		logging.basicConfig(
+			level=getattr(logging, logging_config['level']),
+			format='%(asctime)s - %(levelname)s - %(message)s',
+			handlers=handlers
+		)
 
 async def start_server(enhancer, config: dict):
 	"""Start the WebSocket server."""
