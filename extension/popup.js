@@ -1,14 +1,75 @@
 let ws;
 let sources = {};
+let messageQueue = [];
+let isConnecting = false;
+
+// Message chunking implementation
+class MessageChunker {
+	constructor(maxChunkSize = 1024 * 64) { // 64KB default chunk size
+		this.maxChunkSize = maxChunkSize;
+		this.messageCounter = 0;
+	}
+
+	chunkMessage(message, type) {
+		const messageId = `msg_${Date.now()}_${this.messageCounter++}`;
+		const stringified = JSON.stringify(message);
+		const totalLength = stringified.length;
+		const chunks = [];
+
+		// Send metadata chunk first
+		const totalChunks = Math.ceil(totalLength / this.maxChunkSize);
+		const metadataChunk = {
+			messageId,
+			chunkIndex: -1, // Metadata chunk indicator
+			totalChunks,
+			type
+		};
+		chunks.push(metadataChunk);
+
+		// Split message into chunks
+		for (let i = 0; i < totalLength; i += this.maxChunkSize) {
+			const chunk = stringified.slice(i, i + this.maxChunkSize);
+			const chunkObj = {
+				messageId,
+				chunkIndex: Math.floor(i / this.maxChunkSize),
+				chunk
+			};
+			chunks.push(chunkObj);
+		}
+
+		return chunks;
+	}
+}
+
+const messageChunker = new MessageChunker();
 
 // Connect to WebSocket server
 function connectWebSocket() {
+	if (ws?.readyState === WebSocket.OPEN) {
+		displayMessage("WebSocket already connected.", 'system');
+		return;
+	}
+
+	if (isConnecting) {
+		displayMessage("WebSocket connection already in progress.", 'system');
+		return;
+	}
+
+	isConnecting = true;
+
 	ws = new WebSocket("ws://localhost:8765");
 
 	ws.onopen = () => {
-		console.log("Connected to WebSocket server.");
+		isConnecting = false;
+
+		// Send any queued messages
+		while (messageQueue.length > 0) {
+			const queuedMessage = messageQueue.shift();
+			ws.send(JSON.stringify(queuedMessage));
+		}
+
 		// Send new chat message to reset server state
-		ws.send(JSON.stringify({ action: "new_chat" }));
+		sendWebSocketMessage({ action: "new_chat" });
 	};
 
 	ws.onmessage = (event) => {
@@ -22,19 +83,39 @@ function connectWebSocket() {
 				displayMessage("No response received from server.", 'system');
 			}
 		} catch (error) {
-			console.error("Error parsing WebSocket response:", error);
 			displayMessage("Error receiving response from server.", 'system');
 		}
 	};
 
 	ws.onerror = (error) => {
-		console.error("WebSocket error:", error);
-		displayMessage("WebSocket error: " + error.message, 'system');
+		displayMessage("WebSocket error. Please try refreshing the popup.", 'system');
+		isConnecting = false;
 	};
 
 	ws.onclose = () => {
-		console.log("WebSocket connection closed.");
+		isConnecting = false;
 	};
+}
+
+// Safe WebSocket send function
+function sendWebSocketMessage(message) {
+	if (!ws || ws.readyState === WebSocket.CONNECTING) {
+		messageQueue.push(message);
+		return;
+	}
+
+	if (ws.readyState !== WebSocket.OPEN) {
+		messageQueue.push(message);
+		connectWebSocket();
+		return;
+	}
+
+	try {
+		ws.send(JSON.stringify(message));
+	} catch (error) {
+		messageQueue.push(message);
+		connectWebSocket();
+	}
 }
 
 // Save chat state to chrome.storage.local
@@ -42,34 +123,36 @@ function saveChatState() {
 	const chatMessages = Array.from(document.getElementsByClassName('message')).map(
 		(message) => ({
 			text: message.innerHTML,
-			sender: message.classList.contains('user') ? 'user' : message.classList.contains('bot') ? 'bot' : 'system'
+			sender: message.classList.contains('user') ? 'user' :
+				message.classList.contains('bot') ? 'bot' : 'system'
 		})
 	);
 	chrome.storage.local.set({
 		chatMessages: chatMessages,
-		sources: sources  // Save sources instead of urls
-	}, () => {
-		console.log("Chat state saved.");
-	});
+		sources: sources
+	}, () => {});
 }
 
 // Load chat state from chrome.storage.local
 function loadChatState() {
-	chrome.storage.local.get(['chatMessages', 'sources'], (result) => {
-		if (result.sources) {
-			sources = result.sources;
-			displaySources();
-		}
-		if (result.chatMessages) {
-			const chatBox = document.getElementById('chat-box');
-			chatBox.innerHTML = '';
-			result.chatMessages.forEach((message) => {
-				const messageDiv = document.createElement('div');
-				messageDiv.classList.add('message', message.sender);
-				messageDiv.innerHTML = message.text;
-				chatBox.appendChild(messageDiv);
-			});
-		}
+	return new Promise((resolve) => {
+		chrome.storage.local.get(['chatMessages', 'sources'], (result) => {
+			if (result.sources) {
+				sources = result.sources;
+				displaySources();
+			}
+			if (result.chatMessages) {
+				const chatBox = document.getElementById('chat-box');
+				chatBox.innerHTML = '';
+				result.chatMessages.forEach((message) => {
+					const messageDiv = document.createElement('div');
+					messageDiv.classList.add('message', message.sender);
+					messageDiv.innerHTML = message.text;
+					chatBox.appendChild(messageDiv);
+				});
+			}
+			resolve();
+		});
 	});
 }
 
@@ -94,7 +177,7 @@ function getTabUrl() {
 			saveChatState();
 			displaySources();
 		} else {
-			console.error("Unable to retrieve tab URL.");
+			displayMessage("Unable to retrieve tab URL.", 'system');
 		}
 	});
 }
@@ -164,101 +247,84 @@ function sendQuery() {
 	const getTabUrlBtn = document.getElementById('get-tab-url-btn');
 	const query = queryInput.value.trim();
 
-	if (query && ws.readyState === WebSocket.OPEN) {
-		// Disable all input elements
-		const elementsToDisable = [
-			queryInput,
-			sendQueryBtn,
-			urlInput,
-			addUrlBtn,
-			getTabUrlBtn
-		];
+	if (!query) return;
 
-		// Disable all elements
-		elementsToDisable.forEach(element => {
-			element.disabled = true;
-			if (element.tagName.toLowerCase() === 'input') {
-				element.classList.add('input-disabled');
-			}
-		});
+	// Disable all input elements
+	const elementsToDisable = [
+		queryInput,
+		sendQueryBtn,
+		urlInput,
+		addUrlBtn,
+		getTabUrlBtn
+	];
 
-		displayMessage(query, 'user');
-		queryInput.value = ''; // Clear input
+	elementsToDisable.forEach(element => {
+		element.disabled = true;
+		if (element.tagName.toLowerCase() === 'input') {
+			element.classList.add('input-disabled');
+		}
+	});
 
-		const message = {
-			query: query,
-			sources: sources
-		};
+	displayMessage(query, 'user');
+	queryInput.value = ''; // Clear input
 
-		ws.send(JSON.stringify(message));
+	const message = {
+		query: query,
+		sources: sources
+	};
 
-		// Re-enable input and button after response is received
-		ws.onmessage = (event) => {
-			try {
-				const response = JSON.parse(event.data);
-				if (response && response.response) {
-					displayMessage(response.response, 'bot');
-				} else if (response.error) {
-					displayMessage(response.error, 'system');
-				} else {
-					displayMessage("No response received from server.", 'system');
-				}
-			} catch (error) {
-				console.error("Error parsing WebSocket response:", error);
-				displayMessage("Error receiving response from server.", 'system');
-			} finally {
-				// Re-enable all elements
-				elementsToDisable.forEach(element => {
-					element.disabled = false;
-					if (element.tagName.toLowerCase() === 'input') {
-						element.classList.remove('input-disabled');
-					}
-				});
-			}
-		};
-	} else if (ws.readyState !== WebSocket.OPEN) {
-		displayMessage("WebSocket is not connected. Please try again later.", 'system');
-	}
+	// Chunk the message
+	const chunks = messageChunker.chunkMessage(message, 'query');
+
+	// Send all chunks
+	chunks.forEach((chunk, index) => {
+		sendWebSocketMessage(chunk);
+	});
+
+	// Re-enable handler is in ws.onmessage
 }
 
 // Handle new chat
 function handleNewChat() {
 	// Clear local storage
-	chrome.storage.local.clear(() => {
-		console.log("Local storage cleared.");
-	});
+	chrome.storage.local.clear(() => {});
 
 	// Reset sources and chat box
 	sources = {};
 	const chatBox = document.getElementById('chat-box');
 	chatBox.innerHTML = '';
 
-	// Reconnect WebSocket
-	if (ws) ws.close();
-	connectWebSocket();
+	// Close existing connection if any
+	if (ws && ws.readyState === WebSocket.OPEN) {
+		ws.close();
+	}
 
-	console.log("New chat initialized.");
+	// Establish new connection
+	connectWebSocket();
 }
 
-// Initialize WebSocket connection
-connectWebSocket();
+// Initialize popup
+document.addEventListener('DOMContentLoaded', async () => {
+	// First load the state
+	await loadChatState();
 
-// Load state when the popup is opened
-document.addEventListener('DOMContentLoaded', () => {
-	loadChatState();
+	// Then establish WebSocket connection
 	connectWebSocket();
-});
 
-// Attach event listeners
-document.getElementById('add-url-btn').addEventListener('click', addUrl);
-document.getElementById('get-tab-url-btn').addEventListener('click', getTabUrl);
-document.getElementById('send-query-btn').addEventListener('click', sendQuery);
-document.getElementById('query-input').addEventListener('keydown', (event) => {
-	if (event.key === 'Enter') {
-		sendQuery();
-	}
+	// Wait a short moment to ensure DOM is fully loaded
+	setTimeout(() => {
+		// Attach event listeners
+		document.getElementById('add-url-btn').addEventListener('click', addUrl);
+		document.getElementById('get-tab-url-btn').addEventListener('click', getTabUrl);
+		document.getElementById('send-query-btn').addEventListener('click', sendQuery);
+		document.getElementById('query-input').addEventListener('keydown', (event) => {
+			if (event.key === 'Enter') {
+				sendQuery();
+			}
+		});
+		document.getElementById('close-popup-btn').addEventListener('click', () => {
+			window.close();
+		});
+		document.getElementById('new-chat-btn').addEventListener('click', handleNewChat);
+	}, 100);
 });
-document.getElementById('close-popup-btn').addEventListener('click', () => {
-	window.close();
-});
-document.getElementById('new-chat-btn').addEventListener('click', handleNewChat);
