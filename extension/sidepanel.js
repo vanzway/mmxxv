@@ -321,16 +321,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 	// Wait a short moment to ensure DOM is fully loaded
 	setTimeout(() => {
 		// Attach event listeners
-		document.getElementById('add-url-btn').addEventListener('click', addUrl);
+		//document.getElementById('add-url-btn').addEventListener('click', addUrl);
 		document.getElementById('get-tab-url-btn').addEventListener('click', getTabUrl);
 		document.getElementById('send-query-btn').addEventListener('click', sendQuery);
 		document.getElementById('query-input').addEventListener('keydown', (event) => {
 			if (event.key === 'Enter') {
 				sendQuery();
 			}
-		});
-		document.getElementById('close-popup-btn').addEventListener('click', () => {
-			window.close();
 		});
 		document.getElementById('new-chat-btn').addEventListener('click', handleNewChat);
 	}, 100);
