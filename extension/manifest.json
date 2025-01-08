@@ -1,13 +1,14 @@
 {
 	"manifest_version": 3,
-	"name": "MMXXV",
+	"name": "Meaningful Model for Exploring Expert Views",
 	"description": "Meaningful Model for Exploring Expert Views: Client for MMXXV AI content scraping and inference server",
 	"version": "1.0",
 
 	"permissions": [
 		"activeTab",
 		"scripting",
-		"storage"
+		"storage",
+		"sidePanel"
 	],
 
 	"background": {
@@ -15,7 +16,6 @@
 	},
 
 	"action": {
-		"default_popup": "popup.html",
 		"default_icon": {
 			"16": "icons/icon16.png",
 			"48": "icons/icon48.png",
@@ -33,6 +33,10 @@
 		"http://*/*",
 		"https://*/*"
 	],
+
+	"side_panel": {
+		"default_path": "sidepanel.html"
+	},
 
 	"content_security_policy": {
 		"extension": {
