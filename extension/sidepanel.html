@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<title>MMXXV Side Panel</title>
+		<style>
+			body {
+				font-family: Arial, sans-serif;
+				background-color: #f4f4f4;
+				margin: 0;
+				padding: 0;
+				height: 100vh;
+				display: flex;
+				flex-direction: column;
+			}
+
+			.content-container {
+				padding: 5px;
+				display: flex;
+				flex-direction: column;
+				flex-grow: 1;
+			}
+
+			.top-banner {
+				width: calc(100% - 20px);
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				padding: 10px;
+				background-color: white;
+				color: black;
+				border-radius: 8px;
+				box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+			}
+
+			.logo-container {
+				display: flex;
+				align-items: center;
+			}
+
+			.logo-container img {
+				width: 137px;
+				height: 30px;
+				margin-right: 10px;
+			}
+
+			.toolbar button {
+				background-color: #673AB7;
+				color: white;
+				padding: 3px 10px;
+				border: 1px solid #777777;
+				border-radius: 4px;
+				cursor: pointer;
+				font-size: x-large;
+			}
+
+			.toolbar button:hover {
+				background-color: #8971b1;
+			}
+
+			#chat-container {
+				flex-grow: 1;
+				margin-top: 20px;
+				border: 1px solid #ddd;
+				padding: 20px;
+				background-color: white;
+				border-radius: 8px;
+				box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+				display: flex;
+				flex-direction: column;
+			}
+
+			#chat-box {
+				flex-grow: 1;
+				overflow-y: auto;
+				display: flex;
+				flex-direction: column;
+				gap: 10px;
+				margin-bottom: 15px;
+			}
+
+			.message {
+				max-width: calc(100% - 22px);
+				font-family: Arial, sans-serif;
+				line-height: 1.5;
+				padding: 10px;
+				border-radius: 5px;
+				border: 1px solid #dddddd;
+				word-wrap: break-word;
+			}
+
+			.code-block {
+				background-color: #f5f5f5;
+				padding: 10px;
+				border-radius: 4px;
+				margin: 0.5em 0;
+				overflow-x: auto;
+				white-space: pre;
+				width: calc(100% - 20px);
+			}
+
+			.inline-code {
+				background-color: #f5f5f5;
+				padding: 2px 4px;
+				border-radius: 3px;
+				font-family: monospace;
+			}
+
+			.user {
+				white-space: pre-wrap;
+				background-color: #ebdfff;
+				margin-left: auto;
+				margin-right: 0;
+			}
+
+			.bot {
+				white-space: pre-wrap;
+				background-color: #f1f1f1;
+				margin-left: 0;
+				margin-right: auto;
+			}
+
+			.system {
+				width: calc(100% - 22px);
+				background-color: #fffbdc;
+				line-break: anywhere;
+			}
+
+			.url-input-container {
+				display: flex;
+				justify-content: center;
+				margin-top: 20px;
+			}
+
+			.url-input-container input[type="url"] {
+				width: 60%;
+				padding: 8px;
+				border: 1px solid #ccc;
+				border-radius: 4px;
+			}
+
+			.url-input-container button {
+				height: 32px;
+				cursor: pointer;
+			}
+
+			.input-container {
+				display: flex;
+				margin-top: auto;
+			}
+
+			#query-input {
+				flex-grow: 1;
+				resize: none;
+				padding: 8px;
+				font-family: arial;
+				border: 1px solid #ccc;
+				border-right: 0px;
+				border-radius: 4px 0px 0px 4px;
+			}
+
+			#send-query-btn {
+				width: 80px;
+				cursor: pointer;
+				border-radius: 0px 4px 4px 0px;
+				border: 1px solid #ccc;
+			}
+
+			.source-container {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				width: 100%;
+			}
+
+			.delete-btn {
+				background: none;
+				border: none;
+				color: #666;
+				cursor: pointer;
+				padding: 4px 8px;
+				margin-left: 8px;
+				font-size: 14px;
+				border-radius: 4px;
+			}
+
+			.delete-btn:hover {
+				background-color: #f0f0f0;
+				color: #333;
+			}
+
+			.input-disabled {
+				background-color: #f5f5f5;
+				cursor: not-allowed;
+			}
+		</style>
+	</head>
+
+	<body>
+		<div class="content-container">
+			<div class="top-banner">
+				<div class="logo-container">
+					<img src="logo.png" alt="Logo">
+					<span></span>
+				</div>
+				<div class="toolbar">
+					<button id="new-chat-btn">+</button>
+				</div>
+			</div>
+
+			<div class="url-input-container">
+				<!--<input type="url" id="url-input" placeholder="Enter URL">
+				<button id="add-url-btn">Add URL</button>-->
+				<button id="get-tab-url-btn">Add Tab Content</button>
+			</div>
+
+			<div id="chat-container">
+				<div id="chat-box"></div>
+				<div class="input-container">
+					<textarea id="query-input" placeholder="Ask a question..."></textarea>
+					<button id="send-query-btn">Send</button>
+				</div>
+			</div>
+		</div>
+
+		<script src="sidepanel.js"></script>
+	</body>
+</html>
